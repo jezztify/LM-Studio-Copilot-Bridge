@@ -607,7 +607,7 @@ func TestShowRoute(t *testing.T) {
 		if response["parameters"] != "7B" {
 			t.Fatalf("parameters = %v", response["parameters"])
 		}
-		assertCapabilities(t, response, "completion", "tools")
+		assertCapabilities(t, response, "completion", "tools", "vision")
 		details, ok := response["details"].(map[string]any)
 		if !ok {
 			t.Fatalf("details = %v", response["details"])
@@ -625,11 +625,25 @@ func TestShowRoute(t *testing.T) {
 		if modelInfo["architecture"] != "llama" {
 			t.Fatalf("architecture = %v", modelInfo["architecture"])
 		}
+		// Copilot reads general.architecture to build the context_length key
+		if modelInfo["general.architecture"] != "llama" {
+			t.Fatalf("general.architecture = %v", modelInfo["general.architecture"])
+		}
+		if modelInfo["general.basename"] != "Vision Model" {
+			t.Fatalf("general.basename = %v", modelInfo["general.basename"])
+		}
 		if modelInfo["format"] != "gguf" {
 			t.Fatalf("format = %v", modelInfo["format"])
 		}
 		if modelInfo["max_context_length"] != float64(16384) {
 			t.Fatalf("max_context_length = %v", modelInfo["max_context_length"])
+		}
+		if modelInfo["loaded_context_length"] != float64(8192) {
+			t.Fatalf("loaded_context_length = %v", modelInfo["loaded_context_length"])
+		}
+		// VS Code reads {arch}.context_length; loaded value (8192) should take priority over max (16384)
+		if modelInfo["llama.context_length"] != float64(8192) {
+			t.Fatalf("llama.context_length = %v", modelInfo["llama.context_length"])
 		}
 		capabilityInfo, ok := modelInfo["capabilities"].(map[string]any)
 		if !ok {

@@ -139,12 +139,18 @@ func normalizeShowResponse(model modelMetadata) map[string]any {
 }
 
 func showCapabilities(model modelMetadata) []string {
-	capabilities := make([]string, 0, 3)
+	capabilities := make([]string, 0, 5)
 	if supportsCompletionCapability(model) {
 		capabilities = append(capabilities, "completion")
 	}
 	if supportsToolsCapability(model) {
 		capabilities = append(capabilities, "tools")
+	}
+	if supportsVisionCapability(model) {
+		capabilities = append(capabilities, "vision")
+	}
+	if supportsReasoningCapability(model) {
+		capabilities = append(capabilities, "thinking")
 	}
 	if supportsEmbeddingCapability(model) {
 		capabilities = append(capabilities, "embedding")
@@ -178,6 +184,32 @@ func supportsToolsCapability(model modelMetadata) bool {
 	return model.TrainedForToolUse != nil && *model.TrainedForToolUse
 }
 
+func supportsVisionCapability(model modelMetadata) bool {
+	if !supportsCompletionCapability(model) {
+		return false
+	}
+	if model.Vision != nil && *model.Vision {
+		return true
+	}
+	// VLM type is a reliable signal even when capabilities field is absent
+	return strings.Contains(normalizedModelType(model.Type), "vlm")
+}
+
+func supportsReasoningCapability(model modelMetadata) bool {
+	if !supportsCompletionCapability(model) {
+		return false
+	}
+	if model.Reasoning != nil && *model.Reasoning {
+		return true
+	}
+	// Name-based heuristic for reasoning/thinking models
+	name := strings.ToLower(model.CanonicalID + " " + model.DisplayName)
+	return strings.Contains(name, "reasoning") ||
+		strings.Contains(name, "thinking") ||
+		strings.Contains(name, "-r1") ||
+		strings.Contains(name, "qwq")
+}
+
 func normalizedModelType(modelType string) string {
 	return strings.ToLower(strings.TrimSpace(modelType))
 }
@@ -206,7 +238,15 @@ func modelInfo(model modelMetadata) map[string]any {
 	}
 	if model.Architecture != "" {
 		info["architecture"] = model.Architecture
+		// Copilot reads general.architecture to find the arch prefix for context_length
+		info["general.architecture"] = strings.ToLower(model.Architecture)
 	}
+	// Copilot reads general.basename for the model display name
+	basename := model.DisplayName
+	if basename == "" {
+		basename = model.CanonicalID
+	}
+	info["general.basename"] = basename
 	if model.Format != "" {
 		info["format"] = model.Format
 	}
@@ -222,6 +262,19 @@ func modelInfo(model modelMetadata) map[string]any {
 	}
 	if model.LoadedContextLength > 0 {
 		info["loaded_context_length"] = model.LoadedContextLength
+	}
+	// Emit the standard Ollama key VS Code reads for "ContextSize".
+	// Prefer the loaded (user-configured) length over the native model limit.
+	effectiveContextLength := model.LoadedContextLength
+	if effectiveContextLength == 0 {
+		effectiveContextLength = model.MaxContextLength
+	}
+	if effectiveContextLength > 0 {
+		if model.Architecture != "" {
+			info[strings.ToLower(model.Architecture)+".context_length"] = effectiveContextLength
+		} else {
+			info["context_length"] = effectiveContextLength
+		}
 	}
 	if model.SizeBytes > 0 {
 		info["size_bytes"] = model.SizeBytes

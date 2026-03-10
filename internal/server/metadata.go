@@ -33,6 +33,7 @@ type modelMetadata struct {
 	Description        string
 	Vision             *bool
 	TrainedForToolUse  *bool
+	Reasoning          *bool
 }
 
 type metadataResolution struct {
@@ -68,6 +69,7 @@ type restModel struct {
 	Capabilities     *struct {
 		Vision            bool `json:"vision"`
 		TrainedForToolUse bool `json:"trained_for_tool_use"`
+		Reasoning         bool `json:"reasoning"`
 	} `json:"capabilities"`
 	Description *string `json:"description"`
 }
@@ -245,8 +247,10 @@ func normalizeRESTModel(model restModel) (modelMetadata, bool) {
 	if model.Capabilities != nil {
 		vision := model.Capabilities.Vision
 		trainedForToolUse := model.Capabilities.TrainedForToolUse
+		reasoning := model.Capabilities.Reasoning
 		metadata.Vision = &vision
 		metadata.TrainedForToolUse = &trainedForToolUse
+		metadata.Reasoning = &reasoning
 	}
 	return metadata, true
 }
