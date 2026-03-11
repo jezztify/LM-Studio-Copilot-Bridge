@@ -14,6 +14,10 @@ import (
 // dropping any chunks where "choices" is an empty array. LM Studio emits such
 // a chunk at the end of every stream to carry usage statistics; VS Code Copilot
 // Chat throws "Response contained no choices" if it sees one.
+//
+// It also rewrites chunks whose delta.content contains <think>...</think> tags,
+// moving the enclosed text into delta.thinking — the field Copilot reads to
+// render the reasoning pane.
 func streamFilteredOpenAIResponse(w http.ResponseWriter, resp *http.Response, logger *slog.Logger, requestID string) error {
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
@@ -22,6 +26,7 @@ func streamFilteredOpenAIResponse(w http.ResponseWriter, resp *http.Response, lo
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
+	extractor := &thinkingExtractor{}
 	var skipNextBlank bool
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -43,13 +48,20 @@ func streamFilteredOpenAIResponse(w http.ResponseWriter, resp *http.Response, lo
 			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			logger.Debug("upstream sse chunk", "request_id", requestID, "data", payload)
 			if payload != "[DONE]" {
-				var chunk struct {
-					Choices []json.RawMessage `json:"choices"`
-				}
-				if json.Unmarshal([]byte(payload), &chunk) == nil && len(chunk.Choices) == 0 {
-					logger.Debug("dropped empty-choices chunk", "request_id", requestID, "data", payload)
-					skipNextBlank = true
-					continue
+				var chunk map[string]any
+				if json.Unmarshal([]byte(payload), &chunk) == nil {
+					choices, _ := chunk["choices"].([]any)
+					if len(choices) == 0 {
+						logger.Debug("dropped empty-choices chunk", "request_id", requestID, "data", payload)
+						skipNextBlank = true
+						continue
+					}
+					if extractor.processChunk(chunk) {
+						if rewritten, err := json.Marshal(chunk); err == nil {
+							line = "data: " + string(rewritten)
+							logger.Debug("rewrote thinking chunk", "request_id", requestID, "data", string(rewritten))
+						}
+					}
 				}
 			}
 		}
@@ -63,6 +75,91 @@ func streamFilteredOpenAIResponse(w http.ResponseWriter, resp *http.Response, lo
 		}
 	}
 	return scanner.Err()
+}
+
+// thinkingExtractor splits <think>...</think> content out of delta.content into
+// delta.thinking across consecutive SSE chunks. State is preserved between
+// chunks so that tag boundaries spanning two chunks are handled correctly.
+type thinkingExtractor struct {
+	inThinking bool
+	pending    string // chars buffered at chunk end that might complete a tag opener/closer
+}
+
+// processChunk rewrites chunk in-place. Returns true if any choice was modified.
+func (e *thinkingExtractor) processChunk(chunk map[string]any) bool {
+	choices, ok := chunk["choices"].([]any)
+	if !ok {
+		return false
+	}
+	modified := false
+	for _, raw := range choices {
+		choice, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		delta, ok := choice["delta"].(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := delta["content"].(string)
+		if !ok || content == "" {
+			continue
+		}
+		normal, thinking := e.extract(content)
+		if thinking != "" || normal != content {
+			delta["content"] = normal
+			if thinking != "" {
+				delta["thinking"] = thinking
+			}
+			modified = true
+		}
+	}
+	return modified
+}
+
+// extract processes text, returning the non-thinking content and the thinking
+// content separately. Any partial tag at the end of text is held in e.pending
+// and prepended on the next call.
+func (e *thinkingExtractor) extract(text string) (normal, thinking string) {
+	all := e.pending + text
+	e.pending = ""
+	for len(all) > 0 {
+		if e.inThinking {
+			idx := strings.Index(all, "</think>")
+			if idx == -1 {
+				cut := partialTagSuffixLen(all, "</think>")
+				thinking += all[:len(all)-cut]
+				e.pending = all[len(all)-cut:]
+				break
+			}
+			thinking += all[:idx]
+			e.inThinking = false
+			all = all[idx+len("</think>"):]
+		} else {
+			idx := strings.Index(all, "<think>")
+			if idx == -1 {
+				cut := partialTagSuffixLen(all, "<think>")
+				normal += all[:len(all)-cut]
+				e.pending = all[len(all)-cut:]
+				break
+			}
+			normal += all[:idx]
+			e.inThinking = true
+			all = all[idx+len("<think>"):]
+		}
+	}
+	return
+}
+
+// partialTagSuffixLen returns how many trailing bytes of s could be the
+// beginning of tag — so they must be buffered rather than emitted.
+func partialTagSuffixLen(s, tag string) int {
+	for n := min(len(tag)-1, len(s)); n > 0; n-- {
+		if strings.HasSuffix(s, tag[:n]) {
+			return n
+		}
+	}
+	return 0
 }
 
 func streamGenerateResponse(w http.ResponseWriter, upstream io.Reader) error {
