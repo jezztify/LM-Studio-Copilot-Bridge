@@ -747,6 +747,7 @@ func TestShowRoute(t *testing.T) {
 		}
 		assertJSONEqual(t, rr.Body.Bytes(), []byte(`{
 			"model":"beta",
+			"remote_model":"beta",
 			"license":"",
 			"modelfile":"",
 			"parameters":"",
@@ -763,7 +764,7 @@ func TestShowRoute(t *testing.T) {
 				"parameter_size":"",
 				"quantization_level":""
 			},
-			"model_info":{}
+			"model_info":{"general.basename":"beta"}
 		}`))
 	})
 

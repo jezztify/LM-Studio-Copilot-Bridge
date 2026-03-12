@@ -37,7 +37,7 @@ func translateChatRequest(req chatRequest) map[string]any {
 
 func translateEmbedRequest(req embedRequest, legacy bool) (map[string]any, error) {
 	input := req.Input
-	if legacy && !unsupportedFieldPresent(req.Prompt) {
+	if legacy && unsupportedFieldPresent(req.Prompt) {
 		input = req.Prompt
 	}
 	if !legacy && !unsupportedFieldPresent(input) {
@@ -125,6 +125,7 @@ func normalizeTagsResponse(modelsMetadata []modelMetadata) map[string]any {
 func normalizeShowResponse(model modelMetadata) map[string]any {
 	return map[string]any{
 		"model":        model.CanonicalID,
+		"remote_model": model.CanonicalID, // Copilot fallback for display name when general.basename is absent
 		"license":      "",
 		"modelfile":    "",
 		"parameters":   model.ParameterSize,

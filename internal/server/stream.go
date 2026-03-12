@@ -92,30 +92,70 @@ func (e *thinkingExtractor) processChunk(chunk map[string]any) bool {
 		return false
 	}
 	modified := false
+	flushedOnFinish := false
 	for _, raw := range choices {
 		choice, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		delta, ok := choice["delta"].(map[string]any)
-		if !ok {
-			continue
+		delta, _ := choice["delta"].(map[string]any)
+		if delta == nil {
+			delta = map[string]any{}
+			choice["delta"] = delta
 		}
-		content, ok := delta["content"].(string)
-		if !ok || content == "" {
-			continue
-		}
-		normal, thinking := e.extract(content)
-		if thinking != "" || normal != content {
-			delta["content"] = normal
-			if thinking != "" {
-				delta["thinking"] = thinking
+
+		if content, ok := delta["content"].(string); ok && content != "" {
+			normal, thinking := e.extract(content)
+			if narration := extractNarrationPreamble(normal); narration != "" {
+				thinking = narration + thinking
+				normal = ""
 			}
-			modified = true
+			if thinking != "" || normal != content {
+				delta["content"] = normal
+				if thinking != "" {
+					delta["thinking"] = thinking
+				}
+				modified = true
+			}
+		}
+
+		// If stream ends while still in a thinking block, flush buffered tail to
+		// delta.thinking on the terminal choice chunk.
+		if !flushedOnFinish {
+			if finishReason, ok := choice["finish_reason"]; ok && finishReason != nil {
+				if tail := e.flushForFinish(); tail != "" {
+					if existing, ok := delta["thinking"].(string); ok {
+						delta["thinking"] = existing + tail
+					} else {
+						delta["thinking"] = tail
+					}
+					modified = true
+				}
+				flushedOnFinish = true
+			}
+		}
+
+		if len(delta) == 0 {
+			delete(choice, "delta")
 		}
 	}
 	return modified
 }
+
+func (e *thinkingExtractor) flushForFinish() string {
+	if !e.inThinking {
+		return ""
+	}
+	tail := e.pending
+	e.pending = ""
+	e.inThinking = false
+	return tail
+}
+
+const (
+	openThinkTag  = "<think>"
+	closeThinkTag = "</think>"
+)
 
 // extract processes text, returning the non-thinking content and the thinking
 // content separately. Any partial tag at the end of text is held in e.pending
@@ -125,27 +165,36 @@ func (e *thinkingExtractor) extract(text string) (normal, thinking string) {
 	e.pending = ""
 	for len(all) > 0 {
 		if e.inThinking {
-			idx := strings.Index(all, "</think>")
+			idx := strings.Index(all, closeThinkTag)
 			if idx == -1 {
-				cut := partialTagSuffixLen(all, "</think>")
+				cut := partialTagSuffixLen(all, closeThinkTag)
 				thinking += all[:len(all)-cut]
 				e.pending = all[len(all)-cut:]
 				break
 			}
 			thinking += all[:idx]
 			e.inThinking = false
-			all = all[idx+len("</think>"):]
-		} else {
-			idx := strings.Index(all, "<think>")
-			if idx == -1 {
-				cut := partialTagSuffixLen(all, "<think>")
-				normal += all[:len(all)-cut]
-				e.pending = all[len(all)-cut:]
-				break
-			}
-			normal += all[:idx]
+			all = all[idx+len(closeThinkTag):]
+			continue
+		}
+
+		openIdx := strings.Index(all, openThinkTag)
+		closeIdx := strings.Index(all, closeThinkTag)
+		switch {
+		case openIdx == -1 && closeIdx == -1:
+			cut := max(partialTagSuffixLen(all, openThinkTag), partialTagSuffixLen(all, closeThinkTag))
+			normal += all[:len(all)-cut]
+			e.pending = all[len(all)-cut:]
+			all = ""
+		case closeIdx != -1 && (openIdx == -1 || closeIdx < openIdx):
+			// Stray close in normal mode: treat preceding text as thinking and
+			// drop the closing marker from user-visible content.
+			thinking += all[:closeIdx]
+			all = all[closeIdx+len(closeThinkTag):]
+		default:
+			normal += all[:openIdx]
 			e.inThinking = true
-			all = all[idx+len("<think>"):]
+			all = all[openIdx+len(openThinkTag):]
 		}
 	}
 	return
@@ -213,10 +262,7 @@ func streamChatResponse(w http.ResponseWriter, upstream io.Reader) error {
 
 func relaySSE(w http.ResponseWriter, upstream io.Reader, transform func([]byte) (map[string]any, bool, error)) error {
 	setStreamingHeaders(w)
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		return fmt.Errorf("response writer does not support streaming")
-	}
+	flusher, _ := w.(http.Flusher)
 
 	scanner := bufio.NewScanner(upstream)
 	buf := make([]byte, 0, 64*1024)
@@ -246,7 +292,9 @@ func relaySSE(w http.ResponseWriter, upstream io.Reader, transform func([]byte) 
 				if err := writeNDJSONChunk(w, lastChunk); err != nil {
 					return err
 				}
-				flusher.Flush()
+				if flusher != nil {
+					flusher.Flush()
+				}
 			}
 			return nil
 		}
@@ -259,7 +307,9 @@ func relaySSE(w http.ResponseWriter, upstream io.Reader, transform func([]byte) 
 		if err := writeNDJSONChunk(w, body); err != nil {
 			return err
 		}
-		flusher.Flush()
+		if flusher != nil {
+			flusher.Flush()
+		}
 		if done {
 			emittedFinal = true
 		}
@@ -280,7 +330,9 @@ func relaySSE(w http.ResponseWriter, upstream io.Reader, transform func([]byte) 
 		if err := writeNDJSONChunk(w, lastChunk); err != nil {
 			return err
 		}
-		flusher.Flush()
+		if flusher != nil {
+			flusher.Flush()
+		}
 	}
 
 	return nil
@@ -359,4 +411,22 @@ func firstChatStreamChoice(choices []struct {
 		}{}
 	}
 	return choices[0]
+}
+
+func extractNarrationPreamble(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.HasSuffix(trimmed, ":") {
+		return ""
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "let me check the current state") {
+		return content
+	}
+	if strings.HasPrefix(lower, "now let me add this patch") {
+		return content
+	}
+	return ""
 }
