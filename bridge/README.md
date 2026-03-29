@@ -18,6 +18,8 @@ VS Code Copilot Chat
 
 The bridge runs as a small local HTTP server that exposes a documented subset of the Ollama HTTP API and translates those requests into LM Studio's OpenAI-compatible API. It also exposes pass-through `/v1/*` routes so clients that speak OpenAI natively can share the same port.
 
+Copilot-secondary consultation is not implemented by this bridge. If you adopt the design in [docs/copilot-secondary-consultation.md](docs/copilot-secondary-consultation.md), the bridge stays the primary LM Studio transport only and a separate VS Code extension-side component owns any Copilot-hosted secondary call.
+
 The goal is practical Copilot + LM Studio compatibility, not full Ollama parity.
 
 ## Copilot Setup
@@ -48,7 +50,7 @@ Route families:
 - `GET /api/version`
 - `GET /healthz`
 
-Streaming is supported for both route families:
+Streaming is supported for both route families by default:
 
 - `/api/generate` and `/api/chat` emit newline-delimited JSON in an Ollama-like shape.
 - `/v1/chat/completions` preserves upstream server-sent events and OpenAI chunk shapes.
@@ -100,6 +102,14 @@ Flags override environment defaults:
 ```
 go run ./cmd/lmstudio-ollama-bridge --host 127.0.0.1 --port 11434 --upstream http://localhost:1234/v1 --log-level debug
 ```
+
+## Copilot Secondary Consultation
+
+The approved secondary-consultation architecture for this project is extension-side, not bridge-side.
+
+- The bridge continues to provide only LM Studio compatibility and primary model transport.
+- Any secondary Copilot-hosted model call must be implemented by a separate VS Code extension-side component using supported VS Code language model APIs.
+- This repository does not expose configuration, runtime behavior, or README claims for bridge-owned Copilot-secondary consultation.
 
 ## Compatibility Behavior
 

@@ -2,7 +2,6 @@ package server
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -268,6 +267,48 @@ func TestChatNonStreaming(t *testing.T) {
 	if _, ok := response["created_at"].(string); !ok {
 		t.Fatalf("created_at missing or invalid: %v", response["created_at"])
 	}
+}
+
+func TestOpenAIChatCompletionsPassthrough(t *testing.T) {
+	t.Parallel()
+
+	const responseBody = `{
+		"id":"chatcmpl-4",
+		"object":"chat.completion",
+		"created":1710000109,
+		"model":"chat-model",
+		"choices":[{"index":0,"message":{"role":"assistant","content":"OpenAI passthrough"},"finish_reason":"stop"}]
+	}`
+
+	var upstreamBody []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var err error
+		upstreamBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read upstream body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	defer upstream.Close()
+
+	handler := NewHandler(config.Config{UpstreamBaseURL: upstream.URL + "/v1"}, slog.New(slog.NewJSONHandler(io.Discard, nil)), "0.1.0")
+
+	const requestBody = `{"model":"chat-model","stream":false,"messages":[{"role":"user","content":"Hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBody))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	assertJSONEqual(t, upstreamBody, []byte(requestBody))
+	assertJSONEqual(t, rr.Body.Bytes(), []byte(responseBody))
 }
 
 func TestEmbedAndEmbeddingsNormalization(t *testing.T) {

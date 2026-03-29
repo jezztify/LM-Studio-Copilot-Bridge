@@ -8,14 +8,14 @@ import (
 )
 
 const (
-	defaultBindHost       = "127.0.0.1"
-	defaultBindPort       = 11434
-	defaultUpstreamBase   = "http://localhost:1234/v1"
-	defaultLogLevel       = "info"
-	envBindHost           = "BRIDGE_BIND_HOST"
-	envBindPort           = "BRIDGE_BIND_PORT"
-	envUpstreamBaseURL    = "LMSTUDIO_BASE_URL"
-	envLogLevel           = "BRIDGE_LOG_LEVEL"
+	defaultBindHost     = "127.0.0.1"
+	defaultBindPort     = 11434
+	defaultUpstreamBase = "http://localhost:1234/v1"
+	defaultLogLevel     = "info"
+	envBindHost         = "BRIDGE_BIND_HOST"
+	envBindPort         = "BRIDGE_BIND_PORT"
+	envUpstreamBaseURL  = "LMSTUDIO_BASE_URL"
+	envLogLevel         = "BRIDGE_LOG_LEVEL"
 )
 
 type Config struct {
@@ -40,6 +40,10 @@ func LoadFromEnv() Config {
 	}
 
 	return cfg
+}
+
+func (c Config) Validate() error {
+	return nil
 }
 
 func (c Config) Address() string {

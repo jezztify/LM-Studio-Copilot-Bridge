@@ -6,7 +6,7 @@ export BRIDGE_BIND_HOST=127.0.0.1
 export BRIDGE_BIND_PORT=11434
 export LMSTUDIO_BASE_URL=http://192.168.0.114:1234/v1
 export BRIDGE_LOG_LEVEL=debug
-export PWD="C:\Repositories\lmstudio-copilot-bridge\run.sh"
+export PWD="C:\Repositories\lmstudio-copilot-bridge\bridge\run.sh"
 
 # Pretty-print JSON log lines while leaving non-JSON output untouched.
 pretty_logs() {
